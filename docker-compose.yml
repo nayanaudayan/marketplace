@@ -1,0 +1,92 @@
+name: marketplace
+
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  DATABASE_URL: postgresql+psycopg://marketplace:${POSTGRES_PASSWORD:-marketplace}@postgres:5432/marketplace
+  REDIS_URL: redis://redis:6379/0
+  JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-in-production-0123456789}
+  PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-dev-webhook-secret}
+  LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hash}
+  EMBEDDING_DIM: ${EMBEDDING_DIM:-768}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+  CELERY_EAGER: "false"
+  CORS_ORIGINS: '["http://localhost:3000","http://localhost:5173"]'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: marketplace
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-marketplace}
+      POSTGRES_DB: marketplace
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketplace"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment: *backend-env
+    volumes:
+      - uploads:/srv/uploads
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  celery-worker:
+    build: ./backend
+    command: celery -A app.workers.celery_app worker --loglevel=info
+    environment: *backend-env
+    depends_on:
+      backend: { condition: service_healthy }
+
+  celery-beat:
+    build: ./backend
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    environment: *backend-env
+    depends_on:
+      backend: { condition: service_healthy }
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_ADMIN_URL: ${ADMIN_URL:-http://localhost:3001}
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      - backend
+
+  # Separate admin console: same codebase, built with VITE_APP_MODE=admin (no shop pages, admin-only login).
+  # In production put it on its own hostname (e.g. admin.example.com) and restrict access (VPN / IP allow-list).
+  admin:
+    build:
+      context: ./frontend
+      args:
+        VITE_APP_MODE: admin
+    ports:
+      - "${ADMIN_PORT:-3001}:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  uploads:
