@@ -6,6 +6,7 @@ services:
     name: marketplace-api
     runtime: docker
     plan: free
+    region: singapore              # keep the same region as the Neon database
     rootDir: backend
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/v1/health
